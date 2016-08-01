@@ -18,7 +18,6 @@ GOOGLE_CHART_URL = 'http://chart.apis.google.com/chart?'
 def log(*args):
     print(*args, file=sys.stderr)
 
-
 class JiraSearch(object):
     """ This factory will create the actual method used to fetch issues from JIRA. This is really just a closure that saves us having
         to pass a bunch of parameters all over the place all the time. """
@@ -26,7 +25,14 @@ class JiraSearch(object):
     def __init__(self, url, auth):
         self.url = url + '/rest/api/latest'
         self.auth = auth
-        self.fields = ','.join(['key', 'issuetype', 'issuelinks', 'subtasks'])
+        self.fields = ','.join([
+            'key',
+            'issuetype',
+            'issuelinks',
+            'subtasks',
+            'summary',
+            'status'
+        ])
 
     def get(self, uri, params={}):
         headers = {'Content-Type' : 'application/json'}
@@ -61,6 +67,12 @@ def build_graph_data(start_issue_key, jira, excludes, show_directions, direction
     def get_key(issue):
         return issue['key']
 
+    def get_node_name(issue_key):
+        fields = jira.get_issue(issue_key)['fields']
+        summary = fields['summary']
+
+        return "%s \n %s" % (issue_key, summary)
+
     def process_link(issue_key, link):
         if link.has_key('outwardIssue'):
             direction = 'outward'
@@ -91,9 +103,12 @@ def build_graph_data(start_issue_key, jira, excludes, show_directions, direction
         if direction not in show_directions:
             node = None
         else:
-            node = '"%s"->"%s"[label="%s"%s]' % (issue_key, linked_issue_key, link_type, extra)
-
-
+            node = '"%s"->"%s"[label="%s"%s]' % (
+                get_node_name(issue_key),
+                get_node_name(linked_issue_key),
+                link_type, extra
+            )
+        
         return linked_issue_key, node
 
     # since the graph can be cyclic we need to prevent infinite recursion
@@ -102,6 +117,7 @@ def build_graph_data(start_issue_key, jira, excludes, show_directions, direction
     def walk(issue_key, graph):
         """ issue is the JSON representation of the issue """
         issue = jira.get_issue(issue_key)
+
         seen.append(issue_key)
         children = []
         fields = issue['fields']
@@ -110,14 +126,19 @@ def build_graph_data(start_issue_key, jira, excludes, show_directions, direction
             for subtask in issues:
                 subtask_key = get_key(subtask)
                 log(subtask_key + ' => references epic => ' + issue_key)
-                node = '"%s"->"%s"[color=orange]' % (issue_key, subtask_key)
+                # link epic tasks backwards, so the epic is at the bottom/right
+                node = '"%s"->"%s"[color=orange]' % (
+                    get_node_name(subtask_key),
+                    get_node_name(issue_key))
                 graph.append(node)
                 children.append(subtask_key)
         if fields.has_key('subtasks'):
             for subtask in fields['subtasks']:
                 subtask_key = get_key(subtask)
                 log(issue_key + ' => has subtask => ' + subtask_key)
-                node = '"%s"->"%s"[color=blue][label="subtask"]' % (issue_key, subtask_key)
+                node = '"%s"->"%s"[color=blue][label="subtask"]' % (
+                    get_node_name(issue_key),
+                    get_node_name(subtask_key))
                 graph.append(node)
                 children.append(subtask_key)
         if fields.has_key('issuelinks'):
@@ -156,7 +177,7 @@ def create_graph_image(graph_data, image_file):
 
 
 def print_graph(graph_data):
-    print('digraph{%s}' % ';'.join(graph_data))
+    print('digraph{%s}' % ';\n'.join(graph_data))
 
 
 def parse_args():
